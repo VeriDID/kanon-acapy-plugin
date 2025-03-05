@@ -1,0 +1,44 @@
+# No version attribute as it's obsolete in newer Docker Compose
+# The name is only supported in newer Docker Compose versions
+# name: kanon-acapy-plugin
+services:
+  aca-py:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+      platforms:
+        - linux/amd64
+    environment:
+      - ACAPY_ADMIN_INSECURE_MODE=true
+      - ACAPY_AUTO_PROVISION=true
+      - ACAPY_DEBUG_CONNECTIONS=true
+      - ACAPY_DEBUG_CREDENTIALS=true
+      - ACAPY_DEBUG_PRESENTATIONS=true
+      - ACAPY_LOG_LEVEL=debug
+      - ACAPY_WALLET_TYPE=askar-anoncreds
+      - ACAPY_WALLET_KEY=kanon_key_secret_000000000000000
+      - ACAPY_WALLET_NAME=kanon_wallet
+      - ACAPY_WALLET_STORAGE_TYPE=default
+      - ACAPY_WALLET_SEED=00000000000000000000000000000000
+      - ACAPY_OPERATOR_KEY=0xdf57089febbacf7ba0bc227dafbffa9fc08a93fdc68e1e42411a14efcf23656e
+      - KANON_WEB3_PROVIDER_URL=http://host.docker.internal:8545
+      - KANON_CONTRACT_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
+      - ACAPY_GENESIS_URL=http://test.bcovrin.vonx.io/genesis
+      - ACAPY_PLUGIN=kanon
+      - ACAPY_ENDPOINT=http://localhost:3000
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      start
+        --inbound-transport http 0.0.0.0 3000
+        --outbound-transport http
+        --admin 0.0.0.0 3001
+        --admin-insecure-mode
+        --webhook-url http://webhook:3002
+        --plugin-config /usr/src/app/plugin-config.yml
+        --no-ledger
+ 

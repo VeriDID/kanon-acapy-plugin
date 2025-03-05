@@ -1,0 +1,49 @@
+FROM python:3.12-slim-bullseye AS base
+
+WORKDIR /usr/src/app
+
+# Install and configure poetry
+USER root
+ENV POETRY_VERSION=1.7.1
+ENV POETRY_HOME=/opt/poetry
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    build-essential \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sSL https://install.python-poetry.org | python -
+ENV PATH="/opt/poetry/bin:$PATH"
+RUN poetry config virtualenvs.in-project true
+
+# Setup project and install dependencies
+COPY pyproject.toml poetry.lock* ./
+RUN mkdir -p kanon
+COPY ./kanon ./kanon/
+COPY docker/plugin-config.yml ./
+RUN cat /usr/src/app/plugin-config.yml
+
+# Install dependencies using poetry
+RUN poetry install --without dev --with integration --all-extras \
+    && rm -rf /root/.cache/pypoetry
+
+FROM python:3.12-slim-bullseye
+
+WORKDIR /usr/src/app
+COPY --from=base /usr/src/app/.venv /usr/src/app/.venv
+COPY --from=base /usr/src/app/kanon /usr/src/app/kanon
+COPY --from=base /usr/src/app/plugin-config.yml /usr/src/app/plugin-config.yml
+
+# Install runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the PATH to use the virtual environment
+ENV PATH="/usr/src/app/.venv/bin:$PATH"
+
+ENTRYPOINT ["aca-py"]
+CMD ["start"] 

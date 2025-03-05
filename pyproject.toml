@@ -9,12 +9,13 @@ packages = [
 
 [tool.poetry.dependencies]
 python = "^3.12"
-hiero-did-sdk-python = { git = "https://github.com/hiero-ledger/hiero-did-sdk-python", branch="main" }
+# hiero-did-sdk-python = { git = "https://github.com/hiero-ledger/hiero-did-sdk-python", branch="main" }
 web3 = "^6.15.1"
+acapy-agent = { version = "~1.2.2", extras = ["testing"] }
 
 # Define ACA-Py as an optional/extra dependancy so it can be
 # explicitly installed with the plugin if desired.
-acapy-agent = { version = "~1.2.2", optional = true, extras = ["testing"] }
+# acapy-agent = { version = "~1.2.2", optional = true, extras = ["testing"] }
 
 [tool.poetry.extras]
 aca-py = ["acapy-agent"]

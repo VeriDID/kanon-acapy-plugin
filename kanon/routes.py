@@ -44,7 +44,7 @@ class KanonResponseSchema(OpenAPISchema):
         required=True,
         metadata={
             "description": "DID that was created",
-            "example": "did:kanon:testnet:zMqXmB7cTsTXqyxDPBbrgu5EPqw61kouK1qjMvnoPa96_0.0.5254964",  # noqa: E501
+            "example": "did:kanon:testnet:0x71C7656EC7ab88b098defB751B7401B5f6d8976F",  # noqa: E501
         },
     )
 

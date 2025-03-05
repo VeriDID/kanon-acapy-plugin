@@ -46,11 +46,11 @@ class TestKanonDIDRegistrar(IsolatedAsyncioTestCase):
         registrar = KanonDIDRegistrar(self.context)
 
         # Patch the parts of the web3.eth contract and account methods used in register
-        registrar.web3.eth.getTransactionCount = MagicMock(return_value=1)
+        registrar.web3.eth.get_transaction_count = MagicMock(return_value=1)
 
         # Create a fake function object for registerDID that returns a fake transaction dict
         fake_register_function = MagicMock()
-        fake_register_function.buildTransaction.return_value = {"gas": 200000}
+        fake_register_function.build_transaction.return_value = {"gas": 200000}
         registrar.contract.functions = MagicMock()
         registrar.contract.functions.registerDID.return_value = fake_register_function
 
@@ -59,8 +59,8 @@ class TestKanonDIDRegistrar(IsolatedAsyncioTestCase):
         registrar.web3.eth.account.sign_transaction = MagicMock(return_value=fake_signed_tx)
 
         # Patch sending the transaction and waiting for receipt
-        registrar.web3.eth.sendRawTransaction = MagicMock(return_value=fake_tx_hash)
-        registrar.web3.eth.waitForTransactionReceipt = MagicMock(return_value=fake_receipt)
+        registrar.web3.eth.send_raw_transaction = MagicMock(return_value=fake_tx_hash)
+        registrar.web3.eth.wait_for_transaction_receipt = MagicMock(return_value=fake_receipt)
         return registrar
 
     async def test_registers_did(self):

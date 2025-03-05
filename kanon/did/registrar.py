@@ -4,6 +4,49 @@ from web3 import Web3
 from ..config import Config
 from .did_method import KANON
 
+CONTRACT_ABI = [
+    {
+        "inputs": [
+            {"internalType": "string", "name": "did", "type": "string"},
+            {"internalType": "string", "name": "context", "type": "string"},
+            {"internalType": "string", "name": "metadata", "type": "string"}
+        ],
+        "name": "registerDID",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {"internalType": "string", "name": "did", "type": "string"}
+        ],
+        "name": "resolveDID",
+        "outputs": [
+            {
+                "components": [
+                    {"internalType": "string", "name": "context", "type": "string"},
+                    {"internalType": "string", "name": "metadata", "type": "string"},
+                    {"internalType": "bool", "name": "active", "type": "bool"}
+                ],
+                "internalType": "struct DIDRegistry.DIDDocument",
+                "name": "",
+                "type": "tuple"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {"internalType": "string", "name": "did", "type": "string"}
+        ],
+        "name": "deactivateDID",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    }
+]
+
 class KanonDIDRegistrar:
     """Kanon DID registrar for EVM-based DID registration using a smart contract."""
 
@@ -14,7 +57,10 @@ class KanonDIDRegistrar:
         config = Config.from_settings(context.settings)
         # Initialize the Web3 client and contract instance
         self.web3 = Web3(Web3.HTTPProvider(config.web3_provider_url))
-        self.contract = self.web3.eth.contract(address=config.contract_address, abi=config.contract_abi)
+        self.contract = self.web3.eth.contract(
+            address=config.contract_address, 
+            abi=CONTRACT_ABI
+        )
         self.operator_key = config.operator_key
         self.account = self.web3.eth.account.from_key(self.operator_key)
 
@@ -40,15 +86,14 @@ class KanonDIDRegistrar:
             if not key_entry:
                 raise Exception("Could not fetch key")
 
-            # Derive the DID from the verkey. You might adjust this formatting as needed.
+            # Derive the DID from the verkey
             did = f"did:kanon:{key_info.verkey}"
-            # Define context and metadata to store on-chain
             context_value = "Kanon DID Registration"
             metadata = "{}"
 
             # Build the transaction to register the DID on the smart contract
-            nonce = self.web3.eth.getTransactionCount(self.account.address)
-            txn = self.contract.functions.registerDID(did, context_value, metadata).buildTransaction({
+            nonce = self.web3.eth.get_transaction_count(self.account.address)
+            txn = self.contract.functions.registerDID(did, context_value, metadata).build_transaction({
                 'from': self.account.address,
                 'nonce': nonce,
                 'gas': 200000,  # Adjust gas limit as needed
@@ -57,11 +102,14 @@ class KanonDIDRegistrar:
 
             # Sign and send the transaction
             signed_txn = self.web3.eth.account.sign_transaction(txn, self.operator_key)
-            #TODO: Add a retry mechanism for the transaction and async execution
-            tx_hash = self.web3.eth.sendRawTransaction(signed_txn.rawTransaction)
-            receipt = self.web3.eth.waitForTransactionReceipt(tx_hash)
-
-            # Insert the DID record into the wallet's store for persistence
+            tx_hash = self.web3.eth.send_raw_transaction(signed_txn.rawTransaction)
+            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
+            
+            # Check if the transaction was successful
+            if not receipt['status']:
+                raise Exception(f"Blockchain transaction failed. Transaction hash: {tx_hash.hex()}")
+            
+            # Only insert the DID record if the transaction was successful
             await wallet._session.handle.insert(
                 "did",
                 did,

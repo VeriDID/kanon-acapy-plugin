@@ -1,0 +1,143 @@
+kanon:
+    web3_provider_url: "http://127.0.0.1:8545/"
+    operator_key: "0xdf57089febbacf7ba0bc227dafbffa9fc08a93fdc68e1e42411a14efcf23656e"
+    contract_address: "0x2CDE9919e81b20B4B33DD562a48a84b54C48F00C"
+    contract_abi: [
+      {
+        "inputs": [
+          {
+            "internalType": "string",
+            "name": "did",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "context",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "metadata",
+            "type": "string"
+          }
+        ],
+        "name": "registerDID",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "string",
+            "name": "did",
+            "type": "string"
+          }
+        ],
+        "name": "resolveDID",
+        "outputs": [
+          {
+            "components": [
+              {
+                "internalType": "string",
+                "name": "context",
+                "type": "string"
+              },
+              {
+                "internalType": "string",
+                "name": "metadata",
+                "type": "string"
+              },
+              {
+                "internalType": "bool",
+                "name": "active",
+                "type": "bool"
+              }
+            ],
+            "internalType": "struct DIDRegistry.DIDDocument",
+            "name": "",
+            "type": "tuple"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "string",
+            "name": "did",
+            "type": "string"
+          }
+        ],
+        "name": "deactivateDID",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {"internalType": "string", "name": "schemaId", "type": "string"},
+          {"internalType": "string", "name": "schemaDetails", "type": "string"}
+        ],
+        "name": "registerSchema",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {"internalType": "string", "name": "schemaId", "type": "string"}
+        ],
+        "name": "getSchema",
+        "outputs": [
+          {"internalType": "string", "name": "schemaDetails", "type": "string"},
+          {"internalType": "address[]", "name": "approvedIssuers", "type": "address[]"}
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {"internalType": "string", "name": "credDefId", "type": "string"},
+          {"internalType": "string", "name": "schemaId", "type": "string"},
+          {"internalType": "address", "name": "issuer", "type": "address"}
+        ],
+        "name": "registerCredentialDefinition",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {"internalType": "string", "name": "credDefId", "type": "string"}
+        ],
+        "name": "getCredentialDefinition",
+        "outputs": [
+          {"internalType": "string", "name": "schemaId", "type": "string"},
+          {"internalType": "address", "name": "issuer", "type": "address"}
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {"internalType": "string", "name": "credentialId", "type": "string"}
+        ],
+        "name": "revokeCredential",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {"internalType": "string", "name": "credentialId", "type": "string"}
+        ],
+        "name": "isCredentialRevoked",
+        "outputs": [
+          {"internalType": "bool", "name": "", "type": "bool"}
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      }
+    ] 

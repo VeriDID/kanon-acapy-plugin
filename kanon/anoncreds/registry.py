@@ -82,12 +82,12 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         Reads the EVM provider URL, Kanon contract address, and ABI from settings.
         """
         settings = Config.from_settings(context.settings)
-        self.web3 = Web3(Web3.HTTPProvider(settings.evm.web3_provider_url))
-        self.operator_key = settings.evm.operator_key
+        self.web3 = Web3(Web3.HTTPProvider(settings.web3_provider_url))
+        self.operator_key = settings.operator_key
         self.account = self.web3.eth.account.from_key(self.operator_key)
         self.kanon_contract = self.web3.eth.contract(
-            address=settings.evm.kanon_contract_address,
-            abi=settings.evm.kanon_contract_abi,
+            address=settings.contract_address,
+            abi=settings.contract_abi,
         )
 
     async def get_schema(self, profile, schema_id) -> GetSchemaResult:
@@ -174,16 +174,16 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
             wallet = inject_or_fail(session, BaseWallet, AnonCredsResolutionError)
             # Transform the schema object into the payload expected by the contract.
             schema_payload = build_kanon_anoncreds_schema(schema)
-            nonce = self.web3.eth.getTransactionCount(self.account.address)
-            txn = self.kanon_contract.functions.registerSchema(schema.schema_id, schema_payload).buildTransaction({
+            nonce = self.web3.eth.get_transaction_count(self.account.address)
+            txn = self.kanon_contract.functions.registerSchema(schema.schema_id, schema_payload).build_transaction({
                 'from': self.account.address,
                 'nonce': nonce,
                 'gas': 300000,
                 'gasPrice': self.web3.to_wei('20', 'gwei'),
             })
             signed_txn = self.web3.eth.account.sign_transaction(txn, self.operator_key)
-            tx_hash = self.web3.eth.sendRawTransaction(signed_txn.rawTransaction)
-            receipt = self.web3.eth.waitForTransactionReceipt(tx_hash)
+            tx_hash = self.web3.eth.send_raw_transaction(signed_txn.rawTransaction)
+            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
             kanon_res = {
                 "schema": {
                     "schema_id": schema.schema_id,
@@ -204,20 +204,20 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
             issuer_did = schema.schema.issuer_id
             wallet = inject_or_fail(session, BaseWallet, AnonCredsResolutionError)
             cred_def_payload = build_kanon_anoncreds_cred_def(credential_definition)
-            nonce = self.web3.eth.getTransactionCount(self.account.address)
+            nonce = self.web3.eth.get_transaction_count(self.account.address)
             txn = self.kanon_contract.functions.registerCredentialDefinition(
                 credential_definition.cred_def_id,
                 schema.schema_id,
                 self.account.address  # Issuer address
-            ).buildTransaction({
+            ).build_transaction({
                 'from': self.account.address,
                 'nonce': nonce,
                 'gas': 300000,
                 'gasPrice': self.web3.to_wei('20', 'gwei'),
             })
             signed_txn = self.web3.eth.account.sign_transaction(txn, self.operator_key)
-            tx_hash = self.web3.eth.sendRawTransaction(signed_txn.rawTransaction)
-            receipt = self.web3.eth.waitForTransactionReceipt(tx_hash)
+            tx_hash = self.web3.eth.send_raw_transaction(signed_txn.rawTransaction)
+            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
             kanon_res = {
                 "credential_definition": {
                     "cred_def_id": credential_definition.cred_def_id,
@@ -249,16 +249,16 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
             receipts = []
             # Assume rev_list.credential_ids is a list of credential IDs to revoke.
             for cred_id in rev_list.credential_ids:
-                nonce = self.web3.eth.getTransactionCount(self.account.address)
-                txn = self.kanon_contract.functions.revokeCredential(cred_id).buildTransaction({
+                nonce = self.web3.eth.get_transaction_count(self.account.address)
+                txn = self.kanon_contract.functions.revokeCredential(cred_id).build_transaction({
                     'from': self.account.address,
                     'nonce': nonce,
                     'gas': 200000,
                     'gasPrice': self.web3.to_wei('20', 'gwei'),
                 })
                 signed_txn = self.web3.eth.account.sign_transaction(txn, self.operator_key)
-                tx_hash = self.web3.eth.sendRawTransaction(signed_txn.rawTransaction)
-                receipt = self.web3.eth.waitForTransactionReceipt(tx_hash)
+                tx_hash = self.web3.eth.send_raw_transaction(signed_txn.rawTransaction)
+                receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
                 receipts.append(receipt)
             kanon_res = {
                 "revocation_list": {
@@ -281,16 +281,16 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
             event_bus = inject_or_fail(session, EventBus, AnonCredsResolutionError)
             receipts = []
             for cred_id in revoked:
-                nonce = self.web3.eth.getTransactionCount(self.account.address)
-                txn = self.kanon_contract.functions.revokeCredential(cred_id).buildTransaction({
+                nonce = self.web3.eth.get_transaction_count(self.account.address)
+                txn = self.kanon_contract.functions.revokeCredential(cred_id).build_transaction({
                     'from': self.account.address,
                     'nonce': nonce,
                     'gas': 200000,
                     'gasPrice': self.web3.to_wei('20', 'gwei'),
                 })
                 signed_txn = self.web3.eth.account.sign_transaction(txn, self.operator_key)
-                tx_hash = self.web3.eth.sendRawTransaction(signed_txn.rawTransaction)
-                receipt = self.web3.eth.waitForTransactionReceipt(tx_hash)
+                tx_hash = self.web3.eth.send_raw_transaction(signed_txn.rawTransaction)
+                receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
                 receipts.append(receipt)
             await event_bus.notify(
                 profile,
