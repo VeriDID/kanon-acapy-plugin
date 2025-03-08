@@ -2,6 +2,7 @@ import re
 import time
 import json
 from typing import Pattern, cast
+import logging
 
 from acapy_agent.anoncreds.base import (
     AnonCredsObjectNotFound,
@@ -61,8 +62,9 @@ KANON_CONTRACT_ABI = [
     },
     {
         "inputs": [
-            {"internalType": "string", "name": "schemaId", "type": "string"},
-            {"internalType": "string", "name": "details", "type": "string"}
+            {"internalType": "string", "name": "_schemaId", "type": "string"},
+            {"internalType": "string", "name": "_details", "type": "string"},
+            {"internalType": "string", "name": "_issuerId", "type": "string"}
         ],
         "name": "registerSchema",
         "outputs": [],
@@ -289,6 +291,7 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         """Register a schema on the Kanon contract.
 
         Signs the transaction using the issuer's private key and calls registerSchema.
+        
         """
         async with profile.session() as session:
             print(schema)
@@ -296,7 +299,6 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
             schema_id = schema.issuer_id + ":" + schema.name + ":" + schema.version
             wallet = inject_or_fail(session, BaseWallet, AnonCredsResolutionError)
             
-            # Transform the schema object into a dictionary first
             schema_dict = {
                 "name": schema.name,
                 "version": schema.version,
@@ -308,7 +310,11 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
             schema_payload = json.dumps(schema_dict)
             
             nonce = self.web3.eth.get_transaction_count(self.account.address)
-            txn = self.kanon_contract.functions.registerSchema(schema_id, schema_payload).build_transaction({
+            txn = self.kanon_contract.functions.registerSchema(
+                schema_id, 
+                schema_payload,
+                issuer_did 
+            ).build_transaction({
                 'from': self.account.address,
                 'nonce': nonce,
                 'gas': 300000,
