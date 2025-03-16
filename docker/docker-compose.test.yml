@@ -1,8 +1,8 @@
-# No version attribute as it's obsolete in newer Docker Compose
+version: '3.8'
 # The name is only supported in newer Docker Compose versions
 # name: kanon-acapy-plugin
 services:
-  aca-py:
+  aca-py-1:
     platform: linux/amd64
     build:
       context: ..
@@ -18,15 +18,25 @@ services:
       - ACAPY_LOG_LEVEL=debug
       - ACAPY_WALLET_TYPE=askar-anoncreds
       - ACAPY_WALLET_KEY=kanon_key_secret_000000000000000
-      - ACAPY_WALLET_NAME=kanon_wallet
+      - ACAPY_WALLET_NAME=kanon_wallet_1
       - ACAPY_WALLET_STORAGE_TYPE=default
-      - ACAPY_WALLET_SEED=00000000000000000000000000000000
+      - ACAPY_WALLET_SEED=00000000000000000000000000000001
       - ACAPY_OPERATOR_KEY=0xdf57089febbacf7ba0bc227dafbffa9fc08a93fdc68e1e42411a14efcf23656e
       - KANON_WEB3_PROVIDER_URL=http://host.docker.internal:8545
       - KANON_CONTRACT_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
       - ACAPY_GENESIS_URL=http://test.bcovrin.vonx.io/genesis
       - ACAPY_PLUGIN=kanon
-      - ACAPY_ENDPOINT=http://localhost:3000
+      - ACAPY_ENDPOINT=http://aca-py-1:3000
+      - ACAPY_AUTO_ACCEPT_INVITES=true
+      - ACAPY_AUTO_ACCEPT_REQUESTS=true
+      - ACAPY_AUTO_PING_CONNECTION=true
+      - ACAPY_AUTO_RESPOND_MESSAGES=true
+      - ACAPY_AUTO_RESPOND_CREDENTIAL_PROPOSAL=true
+      - ACAPY_AUTO_RESPOND_CREDENTIAL_OFFER=true
+      - ACAPY_AUTO_RESPOND_CREDENTIAL_REQUEST=true
+      - ACAPY_AUTO_RESPOND_PRESENTATION_PROPOSAL=true
+      - ACAPY_AUTO_RESPOND_PRESENTATION_REQUEST=true
+      - ACAPY_AUTO_VERIFY_PRESENTATION=true
     ports:
       - "3000:3000"
       - "3001:3001"
@@ -41,4 +51,61 @@ services:
         --webhook-url http://webhook:3002
         --plugin-config /usr/src/app/plugin-config.yml
         --no-ledger
+
+  aca-py-2:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+      platforms:
+        - linux/amd64
+    environment:
+      - ACAPY_ADMIN_INSECURE_MODE=true
+      - ACAPY_AUTO_PROVISION=true
+      - ACAPY_DEBUG_CONNECTIONS=true
+      - ACAPY_DEBUG_CREDENTIALS=true
+      - ACAPY_DEBUG_PRESENTATIONS=true
+      - ACAPY_LOG_LEVEL=debug
+      - ACAPY_WALLET_TYPE=askar-anoncreds
+      - ACAPY_WALLET_KEY=kanon_key_secret_000000000000002
+      - ACAPY_WALLET_NAME=kanon_wallet_2
+      - ACAPY_WALLET_STORAGE_TYPE=default
+      - ACAPY_WALLET_SEED=00000000000000000000000000000002
+      - ACAPY_OPERATOR_KEY=0xdf57089febbacf7ba0bc227dafbffa9fc08a93fdc68e1e42411a14efcf23656e
+      - KANON_WEB3_PROVIDER_URL=http://host.docker.internal:8545
+      - KANON_CONTRACT_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
+      - ACAPY_GENESIS_URL=http://test.bcovrin.vonx.io/genesis
+      - ACAPY_PLUGIN=kanon
+      - ACAPY_ENDPOINT=http://aca-py-2:4000
+      - ACAPY_AUTO_ACCEPT_INVITES=true
+      - ACAPY_AUTO_ACCEPT_REQUESTS=true
+      - ACAPY_AUTO_PING_CONNECTION=true
+      - ACAPY_AUTO_RESPOND_MESSAGES=true
+      - ACAPY_AUTO_RESPOND_CREDENTIAL_PROPOSAL=true
+      - ACAPY_AUTO_RESPOND_CREDENTIAL_OFFER=true
+      - ACAPY_AUTO_RESPOND_CREDENTIAL_REQUEST=true
+      - ACAPY_AUTO_RESPOND_PRESENTATION_PROPOSAL=true
+      - ACAPY_AUTO_RESPOND_PRESENTATION_REQUEST=true
+      - ACAPY_AUTO_VERIFY_PRESENTATION=true
+    ports:
+      - "4000:4000"
+      - "4001:4001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      start
+        --inbound-transport http 0.0.0.0 4000
+        --outbound-transport http
+        --admin 0.0.0.0 4001
+        --admin-insecure-mode
+        --webhook-url http://webhook:3002
+        --plugin-config /usr/src/app/plugin-config.yml
+        --no-ledger
+
+  webhook:
+    image: nginx:alpine
+    ports:
+      - "3002:3002"
+    command: >
+      sh -c "echo 'server { listen 3002; location / { return 200 \"{\\\"status\\\":\\\"success\\\"}\"; add_header Content-Type application/json; } }' > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
  
