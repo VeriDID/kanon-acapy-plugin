@@ -1,7 +1,7 @@
 import re
 import time
 import json
-from typing import Pattern
+from typing import Pattern, Optional
 import logging
 
 from acapy_agent.anoncreds.base import (
@@ -19,9 +19,12 @@ from acapy_agent.anoncreds.base import (
     RevRegDefResult,
     SchemaResult,
 )
+
+from acapy_agent.anoncreds.models.credential_definition import CredDefState, CredDef
 from acapy_agent.anoncreds.events import RevListFinishedEvent
 from acapy_agent.anoncreds.models.schema_info import AnoncredsSchemaInfo
 from acapy_agent.core.event_bus import EventBus
+from acapy_agent.core.profile import Profile
 from acapy_agent.wallet.base import BaseWallet
 from web3 import Web3
 
@@ -38,6 +41,7 @@ from .types import (
     build_kanon_anoncreds_cred_def,
 )
 from ..utils import inject_or_fail
+from acapy_agent.anoncreds.models.schema import Schema as AnoncredsSchema
 
 # Define the Kanon contract ABI directly in this file
 KANON_CONTRACT_ABI = [
@@ -175,324 +179,167 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         logging.info("Kanon AnonCreds Registry setup complete")
 
     async def get_schema(self, profile, schema_id) -> GetSchemaResult:
-        """
-        Get schema from:
-        1) The local wallet (if previously stored),
-        2) The Kanon contract (blockchain) if not found locally.
-        """
-        from acapy_agent.anoncreds.models.schema import Schema
+        """Get schema from the Kanon contract.
 
-        # 1) Attempt local wallet fetch
+        Calls the smart contract's getSchema function which returns the schema details
+        and a list of approved issuers.
+        """
         try:
-            async with profile.session() as session:
-                # Try with the provided ID first
-                schema_record = await session.handle.fetch(
-                    "anoncreds:schema", schema_id
-                )
-                
-                # If not found, try with a sanitized version of the ID
-                if not schema_record:
-                    # Create a sanitized version of the ID
-                    parts = schema_id.split(":")
-                    if len(parts) >= 4:
-                        # Extract the schema name and version
-                        schema_name = parts[-2]
-                        schema_version = parts[-1]
-                        # Create a sanitized schema name
-                        sanitized_schema_name = schema_name.replace(" ", "_")
-                        # Reconstruct the ID
-                        sanitized_schema_id = f"{parts[0]}:{parts[1]}:{parts[2]}:{sanitized_schema_name}:{schema_version}"
-                        
-                        logging.debug(f"Original schema_id not found, trying sanitized version: {sanitized_schema_id}")
-                        schema_record = await session.handle.fetch(
-                            "anoncreds:schema", sanitized_schema_id
-                        )
-                
-                if schema_record:
-                    # Found in local wallet
-                    try:
-                        # Deserialize the JSON string to a dictionary
-                        schema_data = json.loads(schema_record.value)
-                        logging.debug(f"Successfully deserialized schema from wallet: {schema_data}")
-                    except json.JSONDecodeError:
-                        # If not a JSON string, try using it directly (for backward compatibility)
-                        schema_data = schema_record.value
-                        logging.debug("Using schema record value directly (not JSON)")
-                    
-                    issuer_id = schema_data.get("issuer_id", "")
-                    schema_name = schema_data.get("name", "")
-                    schema_version = schema_data.get("version", "")
-                    attr_names = schema_data.get("attrNames", [])
-                    
-                    schema = Schema(
-                        issuer_id=issuer_id,
-                        name=schema_name,
-                        version=schema_version,
-                        attr_names=attr_names,
-                    )
-                    
-                    # Use the original schema_id for the result
-                    # to maintain compatibility with the caller's expectations
-                    return GetSchemaResult(
-                        schema_id=schema_id,
-                        schema=schema,
-                        resolution_metadata={},
-                        schema_metadata={
-                            "issuer": issuer_id,
-                            "from": "wallet",
-                            "blockchain_id": schema_data.get("blockchain_id", schema_id),
-                        },
-                    )
-        except Exception as wallet_err:
-            logging.debug(f"Local wallet lookup failed for schema={schema_id}, "
-                          f"falling back to blockchain. Error: {wallet_err}")
+            # getSchema returns (schemaDetails, approvedIssuers)
+            schema_details, approved_issuers = self.kanon_contract.functions.getSchema(schema_id).call()
+        except Exception as e:
+            raise AnonCredsResolutionError(str(e))
+        if not schema_details:
+            raise AnonCredsResolutionError("Failed to retrieve schema")
+        try:
+            # Parse the schema details from JSON string
+            schema_dict = json.loads(schema_details)
+            # Create the response objects directly
+            from acapy_agent.anoncreds.base import GetSchemaResult
+            from acapy_agent.anoncreds.models.schema import AnonCredsSchema
 
-        # 2) Not in wallet, try the blockchain
-        try:
-            # For blockchain lookup, we need to ensure we're using the original format
-            blockchain_id = schema_id
-            
-            # Call the contract with the updated ABI
-            schema_details, approved_issuers = self.kanon_contract.functions.getSchema(blockchain_id).call()
-            
-            if not schema_details:
-                raise AnonCredsResolutionError(f"Schema not found on chain or invalid data for ID: {schema_id}")
-            
-            # Parse the schema details from JSON
-            try:
-                schema_data = json.loads(schema_details)
-                schema_name = schema_data.get("name", "")
-                attr_names = schema_data.get("attrNames", [])
-                issuer_id = schema_data.get("issuerId", "")
-            except json.JSONDecodeError:
-                # Fallback if not valid JSON
-                logging.warning(f"Schema details not valid JSON: {schema_details}")
-                # Extract from schema_id
-                parts = schema_id.split(":")
-                issuer_id = ":".join(parts[0:3]) if len(parts) >= 3 else ""
-                schema_name = parts[-2] if len(parts) >= 4 else ""
-                attr_names = []
-            
-            # Extract version from schema_id
-            # Format e.g.: did:kanon:xxxx:Example schema:1.0
-            parts = schema_id.split(":")
-            schema_version = parts[-1] if len(parts) >= 2 else "1.0"
-            
-            schema = Schema(
-                issuer_id=issuer_id,
-                name=schema_name,
-                version=schema_version,
-                attr_names=attr_names,
+
+            # Create AnonCredsSchema object
+            schema = AnonCredsSchema(
+                issuer_id=schema_dict.get("issuerId", ""),
+                name=schema_dict.get("name", ""),
+                version=schema_dict.get("version", ""),
+                attr_names=schema_dict.get("attrNames", [])
             )
-            
-            # Store in the local wallet for future
-            try:
-                async with profile.session() as session:
-                    # Create a sanitized version of the ID for storage
-                    parts = schema_id.split(":")
-                    if len(parts) >= 4:
-                        schema_name_part = parts[-2]
-                        sanitized_schema_name = schema_name_part.replace(" ", "_")
-                        sanitized_schema_id = f"{parts[0]}:{parts[1]}:{parts[2]}:{sanitized_schema_name}:{parts[-1]}"
-                    else:
-                        sanitized_schema_id = schema_id
-                    
-                    # Create the complete record value dictionary
-                    record_value_dict = {
-                        "issuer_id": issuer_id,
-                        "name": schema_name,
-                        "version": schema_version,
-                        "attrNames": attr_names,
-                        "blockchain_id": schema_id,
-                        "schema_details": schema_details,
-                        "approved_issuers": [str(addr) for addr in approved_issuers] if approved_issuers else [],
-                    }
-                    
-                    # Serialize the entire record to JSON
-                    record_value = json.dumps(record_value_dict)
-                    
-                    await session.handle.insert(
-                        "anoncreds:schema",
-                        sanitized_schema_id,
-                        record_value,  # Store as JSON string
-                        tags={"name": schema_name},
-                    )
-                    logging.debug(f"Cached schema from blockchain to wallet with ID={sanitized_schema_id}")
-            except Exception as store_err:
-                logging.warning(f"Failed to cache schema in wallet for {schema_id}: {store_err}")
-            
+
+            # Create metadata
+            metadata = {
+                "details": schema_details,
+                "approved_issuers": approved_issuers
+            }
+            # Return GetSchemaResult directly
             return GetSchemaResult(
-                schema_id=schema_id,
                 schema=schema,
-                resolution_metadata={},
-                schema_metadata={
-                    "issuer": issuer_id, 
-                    "from": "blockchain", 
-                    "schema_details": schema_details,
-                    "approved_issuers": [str(addr) for addr in approved_issuers] if approved_issuers else [],
-                },
+                schema_id=schema_id,
+                resolution_metadata=None,
+                schema_metadata=metadata
             )
-        except Exception as err:
-            raise AnonCredsResolutionError(f"Error retrieving schema from blockchain: {err}")
+            
+        except json.JSONDecodeError:
+            # If schema_details is not valid JSON, use a simpler approach
+            # Build a response object that matches what build_acapy_get_schema_result expects
+            class SchemaResponse:
+                def __init__(self, schema):
+                    self.schema = schema
+            
+            kanon_res = SchemaResponse({
+                "schema_id": schema_id,
+                "details": schema_details,
+                "approved_issuers": approved_issuers,
+            })
+            
+            return build_acapy_get_schema_result(kanon_res)
+
 
     async def get_credential_definition(
-        self, profile, credential_definition_id
-    ) -> GetCredDefResult:
-        """
-        Get credential definition from:
-        1) The local wallet (if previously stored),
-        2) The Kanon contract (blockchain) if not found locally.
-        """
-        from acapy_agent.anoncreds.models.cred_def import CredDef
+        self,
+        profile: Profile,
+        credential_definition_id: str,
+        _options: Optional[dict] = None,
+    ) -> CredDefResult:
+        """Get a credential definition from the registry."""
+        
+        # Sanitize the credential definition ID for wallet lookup
+        parts = credential_definition_id.split(":")
+        if len(parts) >= 5:
+            schema_parts = parts[3].split(":")
+            if len(schema_parts) >= 2:
+                schema_name = schema_parts[-2]
+                sanitized_schema_name = schema_name.replace(" ", "_")
+                sanitized_cred_def_id = f"{parts[0]}:{parts[1]}:{parts[2]}:{sanitized_schema_name}:{parts[4]}"
+            else:
+                sanitized_cred_def_id = credential_definition_id
+        else:
+            sanitized_cred_def_id = credential_definition_id
 
-        # 1) Attempt local wallet fetch
         try:
             async with profile.session() as session:
-                # Try with the provided ID first
-                cred_def_record = await session.handle.fetch(
-                    "anoncreds:credential_definition", credential_definition_id
-                )
-                
-                # If not found, try with a sanitized version of the ID
-                if not cred_def_record:
-                    # Create a sanitized version of the ID
-                    parts = credential_definition_id.split(":")
-                    if len(parts) >= 5:
-                        # Extract the schema name and tag
-                        schema_name = parts[-2]
-                        tag = parts[-1]
-                        # Create a sanitized schema name
-                        sanitized_schema_name = schema_name.replace(" ", "_")
-                        # Reconstruct the ID
-                        sanitized_cred_def_id = f"{parts[0]}:{parts[1]}:{parts[2]}:{parts[3]}:{sanitized_schema_name}:{tag}"
-                        
-                        logging.debug(f"Original cred_def_id not found, trying sanitized version: {sanitized_cred_def_id}")
-                        cred_def_record = await session.handle.fetch(
-                            "anoncreds:credential_definition", sanitized_cred_def_id
-                        )
-                
-                if cred_def_record:
-                    # Found in local wallet
-                    try:
-                        # Deserialize the JSON string to a dictionary
-                        cred_def_data = json.loads(cred_def_record.value)
-                        logging.debug(f"Successfully deserialized cred def from wallet: {cred_def_data}")
-                    except json.JSONDecodeError:
-                        # If not a JSON string, try using it directly (for backward compatibility)
-                        cred_def_data = cred_def_record.value
-                        logging.debug("Using cred def record value directly (not JSON)")
-                    
-                    issuer_id = cred_def_data.get("issuer_id", "")
-                    schema_id = cred_def_data.get("schema_id", "")
-                    cred_def_type = cred_def_data.get("type", "CL")
-                    tag = cred_def_data.get("tag", "")
-                    value = cred_def_data.get("value", {})
-                    
-                    cred_def = CredDef(
-                        issuer_id=issuer_id,
-                        schema_id=schema_id,
-                        type=cred_def_type,
-                        tag=tag,
-                        value=value,
-                    )
-                    
-                    # Use the original credential_definition_id for the result
-                    # to maintain compatibility with the caller's expectations
-                    return GetCredDefResult(
-                        credential_definition_id=credential_definition_id,
-                        credential_definition=cred_def,
-                        resolution_metadata={},
-                        credential_definition_metadata={
-                            "issuer": issuer_id,
-                            "from": "wallet",
-                            "blockchain_id": cred_def_data.get("blockchain_id", credential_definition_id),
-                        },
-                    )
-        except Exception as wallet_err:
-            logging.debug(f"Local wallet lookup failed for cred_def={credential_definition_id}, "
-                          f"falling back to blockchain. Error: {wallet_err}")
-
-        # 2) Not in wallet, try the blockchain
-        try:
-            # For blockchain lookup, we need to ensure we're using the original format
-            blockchain_id = credential_definition_id
-            
-            # Call the contract with the updated ABI
-            cred_def_value, issuer_id = self.kanon_contract.functions.getCredentialDefinition(blockchain_id).call()
-            
-            if not cred_def_value:
-                raise AnonCredsResolutionError(f"Credential definition not found on chain or invalid data for ID: {credential_definition_id}")
-            
-            # Parse the credential definition from the blockchain
-            try:
-                # Try to parse as JSON
-                cred_def_dict = json.loads(cred_def_value)
-            except json.JSONDecodeError:
-                # If not valid JSON, use as is
-                cred_def_dict = {"value": cred_def_value}
-            
-            # Extract schema_id from credential_definition_id
-            # Format: did:kanon:xxxx:schema_id:tag
-            parts = credential_definition_id.split(":")
-            schema_id = ":".join(parts[3:-1]) if len(parts) >= 5 else ""
-            tag = parts[-1] if len(parts) >= 2 else ""
-            
-            cred_def = CredDef(
-                issuer_id=issuer_id,
-                schema_id=schema_id,
-                type="CL",  # Default to CL type
-                tag=tag,
-                value=cred_def_dict.get("value", cred_def_value),
-            )
-            
-            # Store in the local wallet for future
-            try:
-                async with profile.session() as session:
-                    # Create a sanitized version of the ID for storage
-                    parts = credential_definition_id.split(":")
-                    if len(parts) >= 5:
-                        schema_name_part = parts[-2]
-                        sanitized_schema_name = schema_name_part.replace(" ", "_")
-                        sanitized_cred_def_id = f"{parts[0]}:{parts[1]}:{parts[2]}:{parts[3]}:{sanitized_schema_name}:{parts[-1]}"
-                    else:
-                        sanitized_cred_def_id = credential_definition_id
-                    
-                    # Create the complete record value dictionary
-                    record_value_dict = {
-                        "issuer_id": issuer_id,
-                        "schema_id": schema_id,
-                        "type": "CL",
-                        "tag": tag,
-                        "value": cred_def_dict.get("value", cred_def_value),
-                        "blockchain_id": credential_definition_id,
-                        "cred_def_value": cred_def_value,
-                    }
-                    
-                    # Serialize the entire record to JSON
-                    record_value = json.dumps(record_value_dict)
-                    
-                    await session.handle.insert(
+                # Try to get from wallet first
+                try:
+                    wallet_record = await session.handle.fetch(
                         "anoncreds:credential_definition",
-                        sanitized_cred_def_id,
-                        record_value,  # Store as JSON string
-                        tags={"tag": tag},
+                        sanitized_cred_def_id
                     )
-                    logging.debug(f"Cached cred def from blockchain to wallet with ID={sanitized_cred_def_id}")
-            except Exception as store_err:
-                logging.warning(f"Failed to cache cred def in wallet for {credential_definition_id}: {store_err}")
-            
-            return GetCredDefResult(
-                credential_definition_id=credential_definition_id,
-                credential_definition=cred_def,
-                resolution_metadata={},
-                credential_definition_metadata={
-                    "issuer": issuer_id, 
-                    "from": "blockchain", 
-                    "cred_def_value": cred_def_value,
-                },
-            )
+                    if wallet_record:
+                        record_value = json.loads(wallet_record.value)
+                        cred_def = CredDef(
+                            issuer_id=record_value["issuerId"],
+                            schema_id=record_value["schemaId"],
+                            type=record_value["type"],
+                            tag=record_value["tag"],
+                            value=record_value["value"]
+                        )
+                        cred_def_state = CredDefState(
+                            state=CredDefState.STATE_FINISHED,
+                            credential_definition_id=credential_definition_id,
+                            credential_definition=cred_def
+                        )
+                        return CredDefResult(
+                            job_id="",
+                            credential_definition_state=cred_def_state,
+                            registration_metadata={
+                                "from": "wallet",
+                                "tx_hash": record_value.get("tx_hash"),
+                                "registration_time": record_value.get("registration_time")
+                            },
+                            credential_definition_metadata={
+                                "wallet_id": sanitized_cred_def_id,
+                                "blockchain_id": credential_definition_id,
+                                "registration_time": record_value.get("registration_time")
+                            }
+                        )
+                except Exception as wallet_err:
+                    logging.debug(f"Error fetching from wallet: {wallet_err}")
+
+                # If not in wallet, try to get from blockchain
+                try:
+                    # Call the contract function directly without await
+                    cred_def_data = self.kanon_contract.functions.getCredentialDefinition(
+                        credential_definition_id
+                    ).call()
+                    
+                    if not cred_def_data or not cred_def_data[0]:  # Assuming first element indicates existence
+                        raise AnonCredsRegistrationError(f"Credential definition not found: {credential_definition_id}")
+                    
+                    # Create credential definition object from blockchain data
+                    cred_def = CredDef(
+                        issuer_id=cred_def_data[1],  # issuerId
+                        schema_id=cred_def_data[0],   # schemaId
+                        type="CL",
+                        tag=parts[4] if len(parts) >= 5 else "",
+                        value={}  # You might need to adjust this based on your needs
+                    )
+                    
+                    cred_def_state = CredDefState(
+                        state=CredDefState.STATE_FINISHED,
+                        credential_definition_id=credential_definition_id,
+                        credential_definition=cred_def
+                    )
+                    
+                    return CredDefResult(
+                        job_id="",
+                        credential_definition_state=cred_def_state,
+                        registration_metadata={
+                            "from": "blockchain",
+                            "issuerId": cred_def_data[1]
+                        },
+                        credential_definition_metadata={
+                            "blockchain_id": credential_definition_id,
+                            "schema_id": cred_def_data[0],
+                            "issuer_id": cred_def_data[1]
+                        }
+                    )
+                    
+                except Exception as blockchain_err:
+                    raise AnonCredsRegistrationError(f"Error retrieving from blockchain: {blockchain_err}")
+                
         except Exception as err:
-            raise AnonCredsResolutionError(f"Error retrieving credential definition from blockchain: {err}")
+            raise AnonCredsRegistrationError(f"Error retrieving credential definition: {err}")
 
     async def get_revocation_registry_definition(self, profile, revocation_registry_id) -> GetRevRegDefResult:
         """Not supported in the Kanon contract (no on-chain rev reg definitions)."""
@@ -548,7 +395,8 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         schema_details = json.dumps({
             "name": schema.name,
             "attrNames": schema.attr_names,
-            "issuerId": schema.issuer_id
+            "issuerId": schema.issuer_id,
+            "version": schema.version
         })
         
         # Register on the Kanon contract
@@ -556,6 +404,30 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
             async with profile.session() as session:
                 # Get the issuer's Ethereum address from the wallet
                 issuer_did = schema.issuer_id
+                
+                # Check if schema already exists in wallet
+                try:
+                    existing_schema = await session.handle.fetch(
+                        "anoncreds:schema",
+                        sanitized_schema_id
+                    )
+                    if existing_schema:
+                        logging.info(f"Schema already exists in wallet with ID={sanitized_schema_id}")
+                        schema_state = SchemaState(
+                            state=SchemaState.STATE_FINISHED,
+                            schema_id=schema_id,
+                            schema=schema,
+                        )
+                        return SchemaResult(
+                            job_id="",
+                            schema_state=schema_state,
+                            registration_metadata={
+                                "from": "wallet",
+                                "issuerId": schema.issuerId,
+                            },
+                        )
+                except Exception as wallet_err:
+                    logging.debug(f"Error checking wallet for schema: {wallet_err}")
                 
                 # Prepare the transaction
                 tx = self.kanon_contract.functions.registerSchema(
@@ -586,23 +458,30 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                 # Store in the local wallet
                 # Create the complete record value dictionary
                 record_value_dict = {
-                    "issuer_id": schema.issuer_id,
+                    "issuerId": schema.issuer_id,
                     "name": schema.name,
                     "version": schema.version,
                     "attrNames": schema.attr_names,
                     "blockchain_id": schema_id,
                     "schema_details": schema_details,
+                    "tx_hash": tx_hash.hex(),
+                    "registration_time": int(time.time())
                 }
                 
                 # Serialize the entire record to JSON
                 record_value = json.dumps(record_value_dict)
                 
-                # Store in the wallet
+                # Store in the wallet with additional tags for better querying
                 await session.handle.insert(
                     "anoncreds:schema",
                     sanitized_schema_id,
                     record_value,  # Store as JSON string
-                    tags={"name": schema.name},
+                    tags={
+                        "name": schema.name,
+                        "version": schema.version,
+                        "issuerId": schema.issuer_id,
+                        "blockchain_id": schema_id
+                    }
                 )
                 
                 logging.debug(f"Schema stored in wallet with ID={sanitized_schema_id}")
@@ -620,20 +499,23 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                     schema_state=schema_state,
                     registration_metadata={
                         "tx_hash": tx_hash.hex(),
-                        "issuer_id": schema.issuer_id,
+                        "issuerId": schema.issuer_id,
                         "schema_details": schema_details,
+                        "wallet_id": sanitized_schema_id
                     },
                 )
         except Exception as err:
             raise AnonCredsRegistrationError(f"Error registering schema: {err}")
 
     async def register_credential_definition(
-        self, profile, credential_definition, options: dict = None
+        self,
+        profile: Profile,
+        schema: GetSchemaResult,
+        credential_definition: CredDef,
+        _options: Optional[dict] = None,
     ) -> CredDefResult:
-        """
-        Register a credential definition on the Kanon contract and store it in the local wallet.
-        """
-        from acapy_agent.anoncreds.models.cred_def import CredDefState
+        """Register a credential definition on the registry."""
+        from acapy_agent.anoncreds.models.credential_definition import CredDefState
 
         # Extract schema_id from the credential definition
         schema_id = credential_definition.schema_id
@@ -678,9 +560,36 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         # Register on the Kanon contract
         try:
             async with profile.session() as session:
+                # Check if credential definition already exists in wallet
+                try:
+                    existing_cred_def = await session.handle.fetch(
+                        "anoncreds:credential_definition",
+                        sanitized_cred_def_id
+                    )
+                    if existing_cred_def:
+                        logging.info(f"Credential definition already exists in wallet with ID={sanitized_cred_def_id}")
+                        cred_def_state = CredDefState(
+                            state=CredDefState.STATE_FINISHED,
+                            credential_definition_id=cred_def_id,
+                            credential_definition=credential_definition,
+                        )
+                        return CredDefResult(
+                            job_id="",
+                            credential_definition_state=cred_def_state,
+                            registration_metadata={
+                                "from": "wallet",
+                                "issuerId": issuer_did,
+                            },
+                            credential_definition_metadata={
+                                "wallet_id": sanitized_cred_def_id,
+                                "blockchain_id": cred_def_id,
+                                "registration_time": int(time.time())
+                            }
+                        )
+                except Exception as wallet_err:
+                    logging.debug(f"Error checking wallet for credential definition: {wallet_err}")
+                
                 # Prepare the transaction
-                # This transaction registers the credential definition on the Kanon contract
-                # using the updated ABI
                 tx = self.kanon_contract.functions.registerCredentialDefinition(
                     cred_def_id,  # _credDefId
                     schema_id,     # _schemaId
@@ -709,23 +618,30 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                 # Store in the local wallet
                 # Create the complete record value dictionary
                 record_value_dict = {
-                    "issuer_id": issuer_did,
-                    "schema_id": schema_id,
+                    "issuerId": issuer_did,
+                    "schemaId": schema_id,
                     "type": credential_definition.type,
                     "tag": credential_definition.tag,
                     "value": cred_def_value,
                     "blockchain_id": cred_def_id,
+                    "tx_hash": tx_hash.hex(),
+                    "registration_time": int(time.time())
                 }
                 
                 # Serialize the entire record to JSON
                 record_value = json.dumps(record_value_dict)
                 
-                # Store in the wallet
+                # Store in the wallet with additional tags for better querying
                 await session.handle.insert(
                     "anoncreds:credential_definition",
                     sanitized_cred_def_id,
                     record_value,  # Store as JSON string
-                    tags={"tag": credential_definition.tag},
+                    tags={
+                        "tag": credential_definition.tag,
+                        "schemaId": schema_id,
+                        "issuerId": issuer_did,
+                        "blockchain_id": cred_def_id
+                    }
                 )
                 
                 logging.debug(f"Credential definition stored in wallet with ID={sanitized_cred_def_id}")
@@ -743,8 +659,14 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                     credential_definition_state=cred_def_state,
                     registration_metadata={
                         "tx_hash": tx_hash.hex(),
-                        "issuer_id": issuer_did,
+                        "issuerId": issuer_did,
+                        "wallet_id": sanitized_cred_def_id
                     },
+                    credential_definition_metadata={
+                        "wallet_id": sanitized_cred_def_id,
+                        "blockchain_id": cred_def_id,
+                        "registration_time": int(time.time())
+                    }
                 )
         except Exception as err:
             raise AnonCredsRegistrationError(f"Error registering credential definition: {err}")
@@ -842,3 +764,59 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                 registration_metadata={},
                 revocation_list_metadata={}
             )
+
+    async def get_all_schemas(self, profile) -> list:
+        """Get all schemas from the wallet."""
+        try:
+            async with profile.session() as session:
+                # Search for all schema records
+                schema_records = await session.handle.search_records(
+                    "anoncreds:schema",
+                    {},  # Empty dict to get all records
+                    None,  # No limit
+                    {"name": "asc"}  # Sort by name
+                )
+                
+                schemas = []
+                async for record in schema_records:
+                    try:
+                        # Parse the schema data
+                        schema_data = json.loads(record.value)
+                        logging.debug(f"Parsing schema record {record.id}")
+                        logging.debug(f"Schema data from record: {schema_data}")
+                        
+                        # Create schema object
+                        try:
+                            schema = AnoncredsSchema(
+                                {
+                                    "version": schema_data.get("version", ""),
+                                    "attrNames": schema_data.get("attrNames", [])
+                                }
+                            )
+                            logging.debug(f"Successfully created schema for record {record.id}: {vars(schema)}")
+                        except Exception as schema_err:
+                            logging.error(f"Error creating schema for record {record.id}: {schema_err}")
+                            logging.error(f"Schema data used: {schema_data}")
+                            raise
+                        
+                        # Add to results
+                        schemas.append({
+                            "schema_id": record.id,
+                            "schema": schema,
+                            "metadata": {
+                                "issuer": schema_data.get("issuerId", ""),
+                                "from": "wallet",
+                                "blockchain_id": schema_data.get("blockchain_id", record.id),
+                                "registration_time": schema_data.get("registration_time"),
+                                "tx_hash": schema_data.get("tx_hash"),
+                                "from_cache": schema_data.get("from_cache", False)
+                            }
+                        })
+                    except Exception as parse_err:
+                        logging.warning(f"Error parsing schema record {record.id}: {parse_err}")
+                        continue
+                
+                return schemas
+        except Exception as err:
+            logging.error(f"Error retrieving schemas from wallet: {err}")
+            return []
