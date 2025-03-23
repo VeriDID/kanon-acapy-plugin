@@ -14,8 +14,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Agent URLs
-ISSUER_URL = "http://localhost:3001"
-HOLDER_URL = "http://localhost:4001"
+ISSUER_URL = "http://host.docker.internal:3001"
+HOLDER_URL = "http://host.docker.internal:4001"
 
 def check_agent_status() -> bool:
     """Check if both agents are running."""
@@ -254,8 +254,6 @@ def issue_credential(connection_id: str, cred_def_id: str, issuer_id: str = None
     # Get schema information
     schema_name = "schema"
     schema_version = "1.0"
-    # Extract the full DID from the credential definition ID
-    # Credential definition format: did:method:did-value:3:CL:schema-id:tag
     if issuer_id is None:
         issuer_id = cred_def_id.split(":3:")[0] if ":3:" in cred_def_id else ""
     schema_issuer_id = issuer_id
@@ -380,14 +378,11 @@ def get_all_schemas() -> list:
 def verify_schema(schema_id: str) -> bool:
     """Verify that the schema was created successfully."""
     try:
-        # First try getting all schemas
         schemas_response = get_all_schemas()
         if schemas_response and "schema_ids" in schemas_response:
-            # Check if our schema_id exists in the results
             if schema_id in schemas_response["schema_ids"]:
                 logger.info(f"Schema found in wallet: {schema_id}")
                 return True
-        
         # Fallback to direct schema lookup if not found in list
         response = requests.get(f"{ISSUER_URL}/anoncreds/schema/{schema_id}")
         if response.status_code == 200:
@@ -414,10 +409,8 @@ def verify_credential_definition(cred_def_id: str) -> bool:
 
 def main():
     try:
-        # Enable debug logging
         logging.getLogger().setLevel(logging.DEBUG)
         
-        # Check if agents are running
         if not check_agent_status():
             raise Exception("One or both agents are not running. Please start the agents first.")
         
@@ -440,17 +433,8 @@ def main():
         if not verify_schema(schema_id):
             raise Exception("Failed to verify schema creation")
         
-        # # Step 4: Create credential definition
-        # logger.info("Step 4: Creating credential definition...")
         cred_def_id = create_credential_definition(schema_id, issuer_did)
-        # logger.info(f"Credential definition created with ID: {cred_def_id}")
-        
-        # # Verify credential definition creation
-        # if not verify_credential_definition(cred_def_id):
-        #     raise Exception("Failed to verify credential definition creation")
-        
-        # # Step 5: Issue credential
-        # logger.info("Step 5: Issuing credential...")
+
         issuance_result = issue_credential(
             connection_ids["issuer_connection_id"],
             cred_def_id,
@@ -458,7 +442,6 @@ def main():
             schema_id
         )
         
-        # # Step 6: Verify credential issuance
         if "credential_exchange_id" in issuance_result:
             logger.info("Waiting for credential issuance to complete...")
             if verify_credential_issued(issuance_result["credential_exchange_id"]):

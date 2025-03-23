@@ -1,0 +1,19 @@
+FROM node:18-slim
+
+RUN apt-get update && \
+    apt-get install -y git && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://github.com/VeriDID/kanon_contracts.git /app
+
+WORKDIR /app
+
+RUN yarn install --frozen-lockfile
+
+RUN yarn add --dev ts-node
+
+RUN yarn add --dev @nomicfoundation/hardhat-chai-matchers@^2.0.0 @nomicfoundation/hardhat-ignition-ethers@^0.15.0 @nomicfoundation/hardhat-network-helpers@^1.0.0 @nomicfoundation/hardhat-verify@^2.0.0 @typechain/ethers-v6@^0.5.0 @typechain/hardhat@^9.0.0 @types/chai@^4.2.0 @types/mocha@>=9.1.0 chai@^4.2.0 hardhat-gas-reporter@^1.0.8 solidity-coverage@^0.8.1 typechain@^8.3.0 @nomicfoundation/hardhat-ignition@^0.15.10 @nomicfoundation/ignition-core@^0.15.10
+
+EXPOSE 8545
+
+CMD /bin/sh -c "yarn hardhat node --hostname 0.0.0.0 & sleep 5 && yarn deploy:local && wait"

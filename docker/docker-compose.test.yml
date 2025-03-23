@@ -1,7 +1,12 @@
 version: '3.8'
-# The name is only supported in newer Docker Compose versions
-# name: kanon-acapy-plugin
 services:
+  hardhat-node:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.hardhat
+    ports:
+      - "8545:8545"
+
   aca-py-1:
     platform: linux/amd64
     build:
@@ -22,7 +27,7 @@ services:
       - ACAPY_WALLET_STORAGE_TYPE=default
       - ACAPY_WALLET_SEED=00000000000000000000000000000001
       - ACAPY_OPERATOR_KEY=0xdf57089febbacf7ba0bc227dafbffa9fc08a93fdc68e1e42411a14efcf23656e
-      - KANON_WEB3_PROVIDER_URL=http://host.docker.internal:8545
+      - KANON_WEB3_PROVIDER_URL=http://hardhat-node:8545
       - KANON_CONTRACT_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
       - ACAPY_GENESIS_URL=http://test.bcovrin.vonx.io/genesis
       - ACAPY_PLUGIN=kanon
@@ -40,8 +45,8 @@ services:
     ports:
       - "3000:3000"
       - "3001:3001"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      - hardhat-node
     command: >
       start
         --inbound-transport http 0.0.0.0 3000
@@ -72,7 +77,7 @@ services:
       - ACAPY_WALLET_STORAGE_TYPE=default
       - ACAPY_WALLET_SEED=00000000000000000000000000000002
       - ACAPY_OPERATOR_KEY=0xdf57089febbacf7ba0bc227dafbffa9fc08a93fdc68e1e42411a14efcf23656e
-      - KANON_WEB3_PROVIDER_URL=http://host.docker.internal:8545
+      - KANON_WEB3_PROVIDER_URL=http://hardhat-node:8545
       - KANON_CONTRACT_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
       - ACAPY_GENESIS_URL=http://test.bcovrin.vonx.io/genesis
       - ACAPY_PLUGIN=kanon
@@ -90,8 +95,8 @@ services:
     ports:
       - "4000:4000"
       - "4001:4001"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      - hardhat-node
     command: >
       start
         --inbound-transport http 0.0.0.0 4000
@@ -108,4 +113,14 @@ services:
       - "3002:3002"
     command: >
       sh -c "echo 'server { listen 3002; location / { return 200 \"{\\\"status\\\":\\\"success\\\"}\"; add_header Content-Type application/json; } }' > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
- 
+  
+  test-flow:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test_flow
+    depends_on:
+      - hardhat-node
+      - aca-py-1
+      - aca-py-2
+      - webhook
+    command: ["./entrypoint.sh"]

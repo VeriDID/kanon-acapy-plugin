@@ -1,0 +1,8 @@
+FROM python:3.9-slim
+WORKDIR /app
+COPY docker/test_flow.py .
+COPY docker/entrypoint.sh .
+RUN apt-get update && apt-get install -y netcat && rm -rf /var/lib/apt/lists/*
+RUN pip install requests
+RUN chmod +x entrypoint.sh
+CMD ["./entrypoint.sh"]
