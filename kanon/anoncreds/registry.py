@@ -30,20 +30,11 @@ from web3 import Web3
 
 from ..config import Config
 from .types import (
-    build_acapy_cred_def_result,
-    build_acapy_get_cred_def_result,
-    build_acapy_get_rev_list_result,
-    build_acapy_get_rev_reg_def_result,
     build_acapy_get_schema_result,
-    build_acapy_rev_list_result,
-    build_acapy_schema_result,
-    build_kanon_anoncreds_schema,
-    build_kanon_anoncreds_cred_def,
 )
 from ..utils import inject_or_fail
 from acapy_agent.anoncreds.models.schema import Schema as AnoncredsSchema
 
-# Define the Kanon contract ABI directly in this file
 KANON_CONTRACT_ABI = [
     {
         "inputs": [{"internalType": "string", "name": "_schemaId", "type": "string"}],
@@ -103,27 +94,6 @@ KANON_CONTRACT_ABI = [
     }
 ]
 
-def _validate_resolution_result(result, attribute_name):
-    """Validate resolution result helper."""
-    if getattr(result, attribute_name) is None:
-        if hasattr(result, "resolution_metadata") and result.resolution_metadata:
-            if result.resolution_metadata.get("error") == "notFound":
-                msg = (
-                    result.resolution_metadata.get("message")
-                    if result.resolution_metadata.get("message")
-                    else "Unknown error"
-                )
-                raise AnonCredsObjectNotFound(msg)
-            elif result.resolution_metadata.get("error"):
-                msg = (
-                    result.resolution_metadata.get("message")
-                    if result.resolution_metadata.get("message")
-                    else "Unknown error"
-                )
-                raise AnonCredsResolutionError(msg)
-        raise AnonCredsResolutionError(f"Failed to retrieve {attribute_name}")
-    return result
-
 
 class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
     """
@@ -154,18 +124,15 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         
         logging.info(f"Setting up Kanon AnonCreds Registry with network: {settings.network}")
         
-        # Initialize Web3 connection
         self.web3 = Web3(Web3.HTTPProvider(settings.web3_provider_url))
         if not self.web3.is_connected():
             logging.error(f"Failed to connect to Web3 provider at {settings.web3_provider_url}")
             raise AnonCredsResolutionError(f"Failed to connect to Web3 provider at {settings.web3_provider_url}")
         
-        # Setup operator account
         self.operator_key = settings.operator_key
         self.eth_account = self.web3.eth.account.from_key(self.operator_key)
         logging.info(f"Using operator account: {self.eth_account.address}")
         
-        # Initialize contract
         try:
             self.kanon_contract = self.web3.eth.contract(
                 address=settings.contract_address,
@@ -179,22 +146,14 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         logging.info("Kanon AnonCreds Registry setup complete")
 
     async def get_schema(self, profile, schema_id) -> GetSchemaResult:
-        """Get schema from the Kanon contract.
-
-        Calls the smart contract's getSchema function which returns the schema details
-        and a list of approved issuers.
-        """
         try:
-            # getSchema returns (schemaDetails, approvedIssuers)
             schema_details, approved_issuers = self.kanon_contract.functions.getSchema(schema_id).call()
         except Exception as e:
             raise AnonCredsResolutionError(str(e))
         if not schema_details:
             raise AnonCredsResolutionError("Failed to retrieve schema")
         try:
-            # Parse the schema details from JSON string
             schema_dict = json.loads(schema_details)
-            # Create the response objects directly
             from acapy_agent.anoncreds.base import GetSchemaResult
             from acapy_agent.anoncreds.models.schema import AnonCredsSchema
 
@@ -221,8 +180,6 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
             )
             
         except json.JSONDecodeError:
-            # If schema_details is not valid JSON, use a simpler approach
-            # Build a response object that matches what build_acapy_get_schema_result expects
             class SchemaResponse:
                 def __init__(self, schema):
                     self.schema = schema
@@ -241,10 +198,7 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         profile: Profile,
         credential_definition_id: str,
         _options: Optional[dict] = None,
-    ) -> CredDefResult:
-        """Get a credential definition from the registry."""
-        
-        # Sanitize the credential definition ID for wallet lookup
+    ) -> GetCredDefResult:
         parts = credential_definition_id.split(":")
         if len(parts) >= 5:
             schema_parts = parts[3].split(":")
@@ -274,64 +228,52 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                             tag=record_value["tag"],
                             value=record_value["value"]
                         )
-                        cred_def_state = CredDefState(
-                            state=CredDefState.STATE_FINISHED,
+                        
+                        # Return GetCredDefResult instead of CredDefResult
+                        return GetCredDefResult(
                             credential_definition_id=credential_definition_id,
-                            credential_definition=cred_def
-                        )
-                        return CredDefResult(
-                            job_id="",
-                            credential_definition_state=cred_def_state,
-                            registration_metadata={
-                                "from": "wallet",
-                                "tx_hash": record_value.get("tx_hash"),
-                                "registration_time": record_value.get("registration_time")
-                            },
+                            credential_definition=cred_def,
                             credential_definition_metadata={
                                 "wallet_id": sanitized_cred_def_id,
                                 "blockchain_id": credential_definition_id,
                                 "registration_time": record_value.get("registration_time")
+                            },
+                            resolution_metadata={
+                                "from": "wallet",
+                                "tx_hash": record_value.get("tx_hash"),
                             }
                         )
                 except Exception as wallet_err:
                     logging.debug(f"Error fetching from wallet: {wallet_err}")
 
-                # If not in wallet, try to get from blockchain
                 try:
-                    # Call the contract function directly without await
                     cred_def_data = self.kanon_contract.functions.getCredentialDefinition(
                         credential_definition_id
                     ).call()
                     
-                    if not cred_def_data or not cred_def_data[0]:  # Assuming first element indicates existence
+                    if not cred_def_data or not cred_def_data[0]:  
                         raise AnonCredsRegistrationError(f"Credential definition not found: {credential_definition_id}")
                     
-                    # Create credential definition object from blockchain data
                     cred_def = CredDef(
                         issuer_id=cred_def_data[1],  # issuerId
                         schema_id=cred_def_data[0],   # schemaId
                         type="CL",
                         tag=parts[4] if len(parts) >= 5 else "",
-                        value={}  # You might need to adjust this based on your needs
+                        value={
+                            
+                        }  
                     )
                     
-                    cred_def_state = CredDefState(
-                        state=CredDefState.STATE_FINISHED,
+                    return GetCredDefResult(
                         credential_definition_id=credential_definition_id,
-                        credential_definition=cred_def
-                    )
-                    
-                    return CredDefResult(
-                        job_id="",
-                        credential_definition_state=cred_def_state,
-                        registration_metadata={
-                            "from": "blockchain",
-                            "issuerId": cred_def_data[1]
-                        },
+                        credential_definition=cred_def,
                         credential_definition_metadata={
                             "blockchain_id": credential_definition_id,
                             "schema_id": cred_def_data[0],
                             "issuer_id": cred_def_data[1]
+                        },
+                        resolution_metadata={
+                            "from": "blockchain",
                         }
                     )
                     
@@ -342,7 +284,6 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
             raise AnonCredsRegistrationError(f"Error retrieving credential definition: {err}")
 
     async def get_revocation_registry_definition(self, profile, revocation_registry_id) -> GetRevRegDefResult:
-        """Not supported in the Kanon contract (no on-chain rev reg definitions)."""
         raise NotImplementedError("Revocation registry definition not supported in Kanon contract")
 
     async def get_revocation_list(
@@ -352,7 +293,6 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         timestamp_from_: int,
         timestamp_to: int,
     ) -> GetRevListResult:
-        """Not implemented: Kanon uses per-credential revocation checks instead of rev lists."""
         raise NotImplementedError("Revocation list retrieval not implemented for Kanon contract")
 
     async def get_schema_info_by_id(self, profile, schema_id) -> AnoncredsSchemaInfo:
@@ -362,7 +302,6 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         if not fetched_schema:
             raise AnonCredsResolutionError(f"Schema not found for schema_id={schema_id}")
 
-        # Derive name/version from the fetched schema (fallback as needed)
         name = fetched_schema.name or "Unknown"
         version = fetched_schema.version or "1.0"
         issuer_id = fetched_schema.issuer_id or ""
@@ -468,14 +407,12 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                     "registration_time": int(time.time())
                 }
                 
-                # Serialize the entire record to JSON
                 record_value = json.dumps(record_value_dict)
                 
-                # Store in the wallet with additional tags for better querying
                 await session.handle.insert(
                     "anoncreds:schema",
                     sanitized_schema_id,
-                    record_value,  # Store as JSON string
+                    record_value,  
                     tags={
                         "name": schema.name,
                         "version": schema.version,
@@ -517,10 +454,8 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         """Register a credential definition on the registry."""
         from acapy_agent.anoncreds.models.credential_definition import CredDefState
 
-        # Extract schema_id from the credential definition
         schema_id = credential_definition.schema_id
         
-        # Get the schema to ensure it exists
         try:
             schema_result = await self.get_schema(profile, schema_id)
             if not schema_result or not schema_result.schema:
@@ -528,11 +463,9 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         except Exception as err:
             raise AnonCredsRegistrationError(f"Error retrieving schema: {err}")
         
-        # Construct credential definition ID
         issuer_did = credential_definition.issuer_id
         cred_def_id = f"{issuer_did}:3:CL:{schema_id}:{credential_definition.tag}"
         
-        # Create a sanitized version for storage (replace spaces with underscores)
         parts = schema_id.split(":")
         if len(parts) >= 3:
             schema_name = parts[-2]
@@ -542,7 +475,6 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         else:
             sanitized_cred_def_id = cred_def_id
         
-        # Helper function to convert objects to dictionaries for serialization
         def obj_to_dict(obj):
             if hasattr(obj, "__dict__"):
                 return {k: obj_to_dict(v) for k, v in obj.__dict__.items() if not k.startswith("_")}
@@ -553,14 +485,10 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
             else:
                 return obj
         
-        # Serialize the credential definition value
         cred_def_value = obj_to_dict(credential_definition.value)
-        cred_def_value_json = json.dumps(cred_def_value)
         
-        # Register on the Kanon contract
         try:
             async with profile.session() as session:
-                # Check if credential definition already exists in wallet
                 try:
                     existing_cred_def = await session.handle.fetch(
                         "anoncreds:credential_definition",
@@ -615,8 +543,6 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                 
                 logging.debug(f"Credential definition registered on blockchain with ID={cred_def_id}, tx={tx_hash.hex()}")
                 
-                # Store in the local wallet
-                # Create the complete record value dictionary
                 record_value_dict = {
                     "issuerId": issuer_did,
                     "schemaId": schema_id,
@@ -628,14 +554,12 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                     "registration_time": int(time.time())
                 }
                 
-                # Serialize the entire record to JSON
                 record_value = json.dumps(record_value_dict)
                 
-                # Store in the wallet with additional tags for better querying
                 await session.handle.insert(
                     "anoncreds:credential_definition",
                     sanitized_cred_def_id,
-                    record_value,  # Store as JSON string
+                    record_value, 
                     tags={
                         "tag": credential_definition.tag,
                         "schemaId": schema_id,
@@ -646,14 +570,12 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                 
                 logging.debug(f"Credential definition stored in wallet with ID={sanitized_cred_def_id}")
                 
-                # Create credential definition state
                 cred_def_state = CredDefState(
                     state=CredDefState.STATE_FINISHED,
                     credential_definition_id=cred_def_id,
                     credential_definition=credential_definition,
                 )
                 
-                # Return the result
                 return CredDefResult(
                     job_id="",
                     credential_definition_state=cred_def_state,
@@ -678,14 +600,9 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         raise NotImplementedError("Revocation registry definition not supported in Kanon contract")
 
     async def register_revocation_list(self, profile, rev_reg_def, rev_list, options=None) -> RevListResult:
-        """
-        Simulate revocation by calling revokeCredential for each credential ID.
-        Not truly an AnonCreds revocation list, but an example approach.
-        """
         from acapy_agent.anoncreds.models.revocation import RevListState
         
         async with profile.session() as session:
-            wallet = inject_or_fail(session, BaseWallet, AnonCredsResolutionError)
             receipts = []
             for cred_id in rev_list.credential_ids:
                 nonce = self.web3.eth.get_transaction_count(self.eth_account.address)
@@ -700,13 +617,11 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                 receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
                 receipts.append(receipt)
 
-            # Create a revocation list state
             rev_list_state = RevListState(
                 state=RevListState.STATE_FINISHED,
                 revocation_list=rev_list
             )
             
-            # Return the result directly
             return RevListResult(
                 job_id=None,
                 revocation_list_state=rev_list_state,
@@ -723,10 +638,6 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         revoked,
         options=None
     ) -> RevListResult:
-        """
-        Update revocation by revoking the newly 'revoked' credentials and notify event bus.
-        (Still not a standard AnonCreds rev list, more a direct approach.)
-        """
         from acapy_agent.anoncreds.models.revocation import RevListState
         
         async with profile.session() as session:
@@ -751,13 +662,11 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
                 RevListFinishedEvent.with_payload(curr_list.rev_reg_def_id, list(revoked))
             )
             
-            # Create a revocation list state
             rev_list_state = RevListState(
                 state=RevListState.STATE_FINISHED,
                 revocation_list=curr_list
             )
             
-            # Return the result directly
             return RevListResult(
                 job_id=None,
                 revocation_list_state=rev_list_state,
@@ -769,7 +678,6 @@ class KanonAnonCredsRegistry(BaseAnonCredsResolver, BaseAnonCredsRegistrar):
         """Get all schemas from the wallet."""
         try:
             async with profile.session() as session:
-                # Search for all schema records
                 schema_records = await session.handle.search_records(
                     "anoncreds:schema",
                     {},  # Empty dict to get all records
